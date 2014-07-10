@@ -10,24 +10,40 @@ version := "1.0.0"
 
 scalaVersion := "2.11.1"
 
-lazy val runAllValidations = taskKey[Seq[Unit]]("Runs all standard validations")
-
-lazy val validations = settingKey[Seq[String]]("All standard validations")
-
-def validationTaskFor(arguments: String): Initialize[Task[Unit]] =
-  (runMain in Compile).toTask(s" com.test.foo.validation.RunValidation $arguments") tag(Tags.CPU)
-
-def validationTasksFor(arguments: Seq[String]): Initialize[Task[Seq[Unit]]] = Def.taskDyn {
-  arguments.map(validationTaskFor).joinWith(_.join)
+def dummyTaskGen(name: String): Initialize[Task[Unit]] = Def.task {
+   System.err.println(s"Started  ${name}")
+   Thread.sleep(1000L*6)
+   System.err.println(s"Finished ${name}")
 }
 
-validations := {
+
+lazy val validations = taskKey[Unit]("Run everything, one at a time.")
+
+lazy val names = settingKey[Seq[String]]("All standard validations")
+
+def validationTaskFor(arguments: String): Initialize[Task[Unit]] =
+  (runMain in Compile).toTask(s" com.test.foo.validation.RunValidation $arguments")
+
+
+names := {
   val fromFile = IO.read(file("validation_configs.txt"))
   fromFile.split("\n").map(_.trim).toList
 }
 
-runAllValidations := Def.taskDyn { validationTasksFor(validations.value) }.value
+lazy val allRuns: Def.Initialize[Task[Unit]] = Def.settingDyn {
+  val zero: Def.Initialize[Seq[Task[Unit]]] = Def.setting {  Seq(task(())) }
+  names.value.map(dummyTaskGen).foldLeft(zero) { (acc, current) =>
+  // Does not work: names.value.map(validationTaskFor).foldLeft(zero) { (acc, current) =>
+     acc.zipWith(current) {  case (taskSeq, task) =>
+       taskSeq :+ task.tag(Tags.CPU)
+     }
+  } apply { tasks: Seq[Task[Unit]] =>
+    tasks.join map { seq => () /* Ignore the sequence of unit returned */ }
+  }
+}
 
-concurrentRestrictions in Global := Seq(
+validations := allRuns.value
+
+concurrentRestrictions in Global ++= Seq(
   Tags.limit(Tags.CPU, 2)
 )
